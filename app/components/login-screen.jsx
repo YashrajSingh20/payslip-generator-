@@ -1,36 +1,28 @@
 'use client';
 
-import { OTPInput } from 'input-otp';
-import { ArrowLeft, ArrowRight, Mail } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { OTPInput, REGEXP_ONLY_DIGITS } from 'input-otp';
+import { ChevronDown, LoaderCircle } from 'lucide-react';
+import { useState } from 'react';
 import { apiPost } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { cn } from '@/lib/cn';
-import { AmbientGlow } from './ambient-glow';
-import { Button } from './shadcn/button';
-import { Input } from './shadcn/input';
-import { ErrorNote, Field } from './ui';
 
-const RESEND_SECONDS = 45;
+const OTP_LENGTH = 6;
 
-
-/** Keystone | Liwip, sized so the two wordmarks read at the same height. */
-function LogoPair() {
-  return (
-    <div className="flex items-center gap-4">
-      <img src="/brand/logo-keystone.png" alt="Keystone Commerce" className="h-8 w-auto" />
-      <span className="h-7 w-px bg-ink/20" aria-hidden />
-      <img src="/brand/logo-liwip-light.png" alt="Liwip, Live With Pride" className="h-9 w-auto" />
-    </div>
-  );
-}
+/** Same as the Team Portal: company domains only, so people type just the name. */
+const DOMAINS = [
+  'keystonecommerce.in',
+  'liwip.com',
+  ...(process.env.NODE_ENV === 'development' ? ['keystone.test'] : []),
+];
 
 function OtpSlot({ char, isActive, hasFakeCaret }) {
   return (
     <div
       className={cn(
-        'relative grid h-14 w-full place-items-center rounded-xl border bg-surface font-mono text-[22px] font-medium text-ink transition-all',
-        isActive ? 'border-ember-500 ring-[3px] ring-ember-500/15' : 'border-line-strong',
+        'relative grid h-[52px] w-full place-items-center rounded-xl border bg-paper font-mono text-[20px] font-medium text-ink transition-all',
+        isActive ? 'border-ink-4 bg-surface ring-4 ring-ink/[0.04]' : 'border-sand-2',
       )}
     >
       {char}
@@ -41,145 +33,200 @@ function OtpSlot({ char, isActive, hasFakeCaret }) {
 
 export function LoginScreen() {
   const { signedIn } = useAuth();
-  const [step, setStep] = useState('email');
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
+  const [domain, setDomain] = useState(DOMAINS[0]);
   const [code, setCode] = useState('');
-  const [pending, setPending] = useState(false);
+  const [step, setStep] = useState(1);
   const [error, setError] = useState(null);
-  const [cooldown, setCooldown] = useState(0);
+  const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    if (cooldown <= 0) return undefined;
-    const t = setTimeout(() => setCooldown((c) => c - 1), 1000);
-    return () => clearTimeout(t);
-  }, [cooldown]);
+  const email = `${username.trim().toLowerCase()}@${domain}`;
+  const showAddressHint = step === 1 && username.trim().length > 0;
 
-  async function sendCode(event) {
-    event?.preventDefault();
-    setPending(true);
+  /** Autofill and paste deliver a whole address; split it into name + domain. */
+  function onUsernameChange(e) {
+    const raw = e.target.value;
+    if (!raw.includes('@')) {
+      setUsername(raw);
+      return;
+    }
+    const [local, rest = ''] = raw.split('@');
+    const match = DOMAINS.find((d) => d === rest.trim().toLowerCase());
+    setUsername(local);
+    if (match) setDomain(match);
+  }
+
+  async function sendCode(e) {
+    e.preventDefault();
     setError(null);
+    setLoading(true);
     try {
       await apiPost('/api/auth/send-otp', { email });
-      setStep('code');
       setCode('');
-      setCooldown(RESEND_SECONDS);
-    } catch (e) {
-      setError(e);
+      setStep(2);
+    } catch (err) {
+      setError(err);
     } finally {
-      setPending(false);
+      setLoading(false);
     }
   }
 
-  async function verify(value = code) {
-    if (value.length !== 6 || pending) return;
-    setPending(true);
+  async function verify(e) {
+    e?.preventDefault();
+    if (code.length !== OTP_LENGTH || loading) return;
     setError(null);
+    setLoading(true);
     try {
-      const { user } = await apiPost('/api/auth/verify-otp', { email, code: value });
+      const { user } = await apiPost('/api/auth/verify-otp', { email, code });
       signedIn(user);
-    } catch (e) {
-      setError(e);
+    } catch (err) {
+      setError(err);
       setCode('');
-    } finally {
-      setPending(false);
+      setLoading(false);
     }
   }
+
+  const errorNote = error && (
+    <p className="text-[14px] font-medium text-rust" role="alert">
+      {error.message ?? String(error)}
+      {error.requestId && <span className="mt-1 block break-all text-[12px] text-ink-3">Reference: {error.requestId}</span>}
+    </p>
+  );
+
+  const submitButton = (label) => (
+    <button
+      type="submit"
+      disabled={loading}
+      className="flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-ember-500 text-[15px] font-semibold text-white transition-colors hover:bg-ember-600 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ember-500/20 disabled:opacity-50"
+    >
+      {loading && <LoaderCircle className="size-5 animate-spin" />}
+      {label}
+    </button>
+  );
 
   return (
-    <div className="relative flex min-h-dvh flex-col">
-      <AmbientGlow />
-      <div className="mx-auto flex w-full max-w-[1180px] flex-1 flex-col px-6 sm:px-10">
-        {/* Phones: logos at the top. Larger screens show them above the title. */}
-        <header className="pt-[max(1.75rem,env(safe-area-inset-top))] lg:hidden">
-          <LogoPair />
-        </header>
+    <main className="grid h-[100dvh] place-items-center overflow-hidden bg-paper px-5 py-6">
+      <div className="w-full max-w-[400px]">
+        <h1 className="mb-5 flex items-center gap-4 leading-none">
+          <img src="/brand/logo-keystone.png" alt="Keystone Commerce" className="h-9 w-auto" />
+          <span className="h-7 w-px bg-ink/15" aria-hidden />
+          <img src="/brand/logo-liwip-light.png" alt="Liwip, Live With Pride" className="h-10 w-auto" />
+          <span className="sr-only">Payroll sign in</span>
+        </h1>
 
-        <div className="grid flex-1 content-start gap-8 pb-8 pt-14 sm:content-center sm:pt-8 lg:grid-cols-[minmax(0,1fr)_400px] lg:content-normal lg:items-center lg:gap-20 lg:py-16">
-          <h2 className="font-display text-[44px] leading-none tracking-[-0.01em] text-ink sm:mx-auto sm:w-full sm:max-w-[400px] lg:hidden">
-            Keystone <em className="text-ember-500">Payroll</em>
+        <section aria-labelledby="sign-in-heading" className="rounded-[24px] border border-sand-2 bg-surface p-5 sm:p-7">
+          <h2
+            id="sign-in-heading"
+            className={cn('text-[16px] font-semibold leading-none text-ink', showAddressHint ? 'mb-1.5' : 'mb-5')}
+          >
+            {showAddressHint ? 'Sign in as' : 'Sign in'}
           </h2>
-
-          {/* Brand side */}
-          <section className="hidden lg:block">
-            <LogoPair />
-            <h2 className="mt-10 font-display text-[72px] leading-[0.95] tracking-[-0.02em] text-ink xl:text-[84px]">
-              Keystone <em className="text-ember-500">Payroll</em>
-            </h2>
-          </section>
-
-        <div className="w-full sm:glass sm:mx-auto sm:max-w-[400px] sm:rounded-3xl sm:p-10 lg:mx-0 lg:justify-self-end">
-          {step === 'email' ? (
-            <form onSubmit={sendCode} className="animate-pop-in">
-              <h1 className="font-display text-[40px] leading-none max-sm:sr-only">Sign in</h1>
-              <Field label="Work email" htmlFor="email" className="sm:mt-8">
-                <Input
-                  id="email"
-                  type="email"
-                  autoComplete="email"
-                  autoFocus
-                  required
-                  placeholder="you@keystonecommerce.in"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="h-12 text-[16px] sm:h-11 sm:text-[15px]"
-                />
-              </Field>
-              <ErrorNote error={error} className="mt-4" />
-              <Button type="submit" variant="dark" size="lg" className="mt-5 h-12 w-full sm:h-11" loading={pending}>
-                Continue <ArrowRight />
-              </Button>
-            </form>
-          ) : (
-            <div className="animate-pop-in">
-              <button onClick={() => { setStep('email'); setError(null); }} className="mb-6 inline-flex items-center gap-1.5 text-[13px] text-ink-3 hover:text-ink">
-                <ArrowLeft className="size-4" /> Use a different email
-              </button>
-              <div className="mb-5 grid size-11 place-items-center rounded-xl bg-ember-50 text-ember-600">
-                <Mail className="size-5" />
-              </div>
-              <h1 className="font-display text-[40px] leading-none">Enter code</h1>
-              <p className="mt-2 text-[14px] text-ink-3">Sent to <span className="font-medium text-ink-2">{email}</span></p>
-              <OTPInput
-                maxLength={6}
-                value={code}
-                onChange={setCode}
-                onComplete={verify}
-                autoFocus
-                inputMode="numeric"
-                pattern="^\d*$"
-                containerClassName="mt-8"
-                render={({ slots }) => (
-                  <div className="grid grid-cols-6 gap-2">
-                    {slots.map((slot, i) => <OtpSlot key={i} {...slot} />)}
-                  </div>
-                )}
-              />
-              <ErrorNote error={error} className="mt-4" />
-              <Button variant="dark" size="lg" className="mt-5 h-12 w-full sm:h-11" loading={pending} onClick={() => verify()}>
-                Sign in
-              </Button>
-              <div className="mt-4 text-center text-[13px] text-ink-3">
-                {cooldown > 0 ? (
-                  <span className="num">Resend code in {cooldown}s</span>
-                ) : (
-                  <button onClick={sendCode} className="font-medium text-ember-600 hover:underline">Resend code</button>
-                )}
-              </div>
-              {process.env.NODE_ENV === 'development' && (
-                <p className="mt-8 text-center text-[12px] text-ink-4">
-                  Dev code: <span className="font-mono text-ink-2">123456</span>
-                </p>
-              )}
-            </div>
+          {showAddressHint && (
+            <p className="mb-5 break-all text-[14px] font-semibold leading-5 text-ink" aria-live="polite">
+              {email}
+            </p>
           )}
-        </div>
 
-        </div>
-
-        <footer className="flex justify-center border-t border-ink/[0.06] pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-6 text-[12px] text-ink-4 lg:justify-start">
-          <span>© {new Date().getFullYear()} Keystone Commerce Private Limited</span>
-        </footer>
+          <AnimatePresence mode="wait">
+            {step === 1 ? (
+              <motion.form
+                key="step1"
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                onSubmit={sendCode}
+                className="space-y-4"
+              >
+                <div>
+                  <label htmlFor="login-email" className="sr-only">Work email</label>
+                  {/* Name and domain read as one field, so the ring lives on the wrapper. */}
+                  <div className="flex w-full flex-col overflow-hidden rounded-2xl border border-sand-2 bg-surface transition-[border-color,box-shadow] focus-within:border-ink-4 focus-within:ring-4 focus-within:ring-ink/[0.04]">
+                    <input
+                      id="login-email"
+                      type="text"
+                      value={username}
+                      required
+                      autoFocus
+                      placeholder="name"
+                      inputMode="email"
+                      autoComplete="email"
+                      autoCapitalize="none"
+                      autoCorrect="off"
+                      spellCheck="false"
+                      onChange={onUsernameChange}
+                      className="min-h-[52px] w-full min-w-0 flex-1 bg-transparent px-4 text-[16px] text-ink caret-ember-500 outline-none placeholder:text-ink-4 focus-visible:ring-0 focus-visible:ring-offset-0 autofill:shadow-[inset_0_0_0_1000px_#fff] autofill:[-webkit-text-fill-color:#1d1511]"
+                    />
+                    <span aria-hidden="true" className="mx-4 h-px shrink-0 bg-sand-2" />
+                    {/* The span sets the width; the transparent select sits on top of it. */}
+                    <div className="relative grid w-full items-center px-4 pb-1.5">
+                      <span aria-hidden="true" className="col-start-1 row-start-1 whitespace-nowrap pr-5 text-[16px] text-ink-3">
+                        @{domain}
+                      </span>
+                      <select
+                        aria-label="Email domain"
+                        value={domain}
+                        onChange={(e) => setDomain(e.target.value)}
+                        className="col-start-1 row-start-1 min-h-11 w-full cursor-pointer appearance-none rounded-xl bg-transparent pr-5 text-[16px] text-transparent outline-none focus-visible:bg-sand focus-visible:ring-0 focus-visible:ring-offset-0 [&>option]:text-ink"
+                      >
+                        {DOMAINS.map((d) => <option key={d} value={d}>{d}</option>)}
+                      </select>
+                      <ChevronDown size={15} className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-ink-3" />
+                    </div>
+                  </div>
+                </div>
+                {errorNote}
+                {submitButton('Send login code')}
+              </motion.form>
+            ) : (
+              <motion.form
+                key="step2"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 20 }}
+                onSubmit={verify}
+                className="space-y-4"
+              >
+                <div>
+                  <label htmlFor="login-otp" className="mb-3 block break-all text-[14px] leading-5 text-ink-3">
+                    Code sent to <span className="font-semibold text-ink">{email}</span>
+                  </label>
+                  <OTPInput
+                    id="login-otp"
+                    aria-label="Login code"
+                    value={code}
+                    onChange={setCode}
+                    maxLength={OTP_LENGTH}
+                    pattern={REGEXP_ONLY_DIGITS}
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    autoFocus
+                    containerClassName="w-full"
+                    render={({ slots }) => (
+                      <div className="grid grid-cols-6 gap-2">
+                        {slots.map((slot, i) => <OtpSlot key={i} {...slot} />)}
+                      </div>
+                    )}
+                  />
+                </div>
+                {errorNote}
+                {submitButton('Sign in')}
+                <button
+                  type="button"
+                  onClick={() => { setStep(1); setCode(''); setError(null); }}
+                  className="min-h-11 w-full rounded-xl text-center text-[14px] font-semibold text-ink-3 transition-colors hover:text-ember-600 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ember-500/10"
+                >
+                  Use a different email
+                </button>
+                {process.env.NODE_ENV === 'development' && (
+                  <p className="text-center text-[12px] text-ink-4">
+                    Dev code: <span className="font-mono text-ink-2">123456</span>
+                  </p>
+                )}
+              </motion.form>
+            )}
+          </AnimatePresence>
+        </section>
       </div>
-    </div>
+    </main>
   );
 }
