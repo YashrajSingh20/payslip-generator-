@@ -1,0 +1,41 @@
+# Private CodeBuild job that changes the payroll database schema.
+# Started by backend/infra/buildspec.yml (via run-migrations.sh) before every
+# deploy, at the same commit. Can also be started by hand from the console:
+# with no overrides it only prints the migration status.
+#
+#   MIGRATION_MODE=status   list applied / pending files (default, read-only)
+#   MIGRATION_MODE=migrate  apply pending files; needs
+#                           MIGRATION_CONFIRMATION=apply-schema-migrations
+version: 0.2
+
+env:
+  shell: bash
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - corepack enable
+      - corepack prepare pnpm@10.10.0 --activate
+  build:
+    commands:
+      - set -euo pipefail
+      - pnpm install --frozen-lockfile
+      # Admin (DDL) credentials live only here; the API runs with its own runtime URL.
+      - DATABASE_ADMIN_URL="$(aws ssm get-parameter --name "$MIGRATION_DATABASE_URL_PARAMETER" --with-decryption --query Parameter.Value --output text)"
+      - export DATABASE_ADMIN_URL
+      - export DATABASE_SSL_CA_FILE="$CODEBUILD_SRC_DIR/backend/ap-south-1-rds-ca.pem"
+      - export NODE_ENV=production APP_ENV="$DEPLOY_ENVIRONMENT"
+      - |
+        case "${MIGRATION_MODE:-status}" in
+          status) node scripts/db-migrate.mjs --status ;;
+          migrate)
+            [[ "${MIGRATION_CONFIRMATION:-}" == "apply-schema-migrations" ]] || {
+              echo "MIGRATION_CONFIRMATION=apply-schema-migrations is required" >&2; exit 2;
+            }
+            node scripts/db-migrate.mjs
+            node scripts/db-migrate.mjs --status
+            ;;
+          *) echo "Unsupported MIGRATION_MODE" >&2; exit 2 ;;
+        esac

@@ -1,0 +1,22 @@
+# Local development database only. Production uses AWS RDS (see TECH_STACK).
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: keystone-payroll-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keystone_payroll
+      POSTGRES_USER: payroll
+      POSTGRES_PASSWORD: payroll_local_only
+    ports:
+      - "5435:5432"
+    volumes:
+      - payroll-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payroll -d keystone_payroll"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  payroll-pg:

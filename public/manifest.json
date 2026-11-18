@@ -1,0 +1,9 @@
+{
+  "name": "Keystone Payroll",
+  "short_name": "Payroll",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8f5f1",
+  "theme_color": "#2a160c",
+  "icons": [{ "src": "/brand/logo-liwip-light.png", "sizes": "1158x439", "type": "image/png" }]
+}

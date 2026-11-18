@@ -1,0 +1,105 @@
+# Build -> migrate -> deploy for the payroll API. One CodeBuild project per
+# environment runs this file on every push to its branch:
+#   test branch -> keystone-payroll-test-api
+#   main branch -> keystone-payroll-prod-api
+# Order matters: tests, image build, schema migrations, image push, App Runner
+# update, smoke test. A failed step stops the release. Migrations run before
+# the new code, so every migration must also work with the currently running API.
+version: 0.2
+
+env:
+  shell: bash
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - corepack enable
+      - corepack prepare pnpm@10.10.0 --activate
+  pre_build:
+    commands:
+      - set -euo pipefail
+      - pnpm --dir backend install --frozen-lockfile --prod=false --ignore-workspace
+      - pnpm --dir backend test
+      - IMAGE_TAG="${CODEBUILD_RESOLVED_SOURCE_VERSION:-}"
+      - |
+        if [[ ! "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]]; then
+          echo "CODEBUILD_RESOLVED_SOURCE_VERSION must be a full Git commit SHA" >&2
+          exit 1
+        fi
+      - IMAGE_URI="${ECR_REPOSITORY_URI}:${IMAGE_TAG}"
+      - |
+        if aws ecr describe-images --repository-name "${ECR_REPOSITORY_URI#*/}" --image-ids "imageTag=${IMAGE_TAG}" >/dev/null 2>&1; then
+          IMAGE_EXISTS=true
+        else
+          IMAGE_EXISTS=false
+        fi
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+  build:
+    commands:
+      - |
+        if [[ "$IMAGE_EXISTS" == "true" ]]; then
+          echo "Image already exists for ${IMAGE_TAG}; reusing the immutable tag."
+        else
+          docker build --pull --file backend/Dockerfile --tag "$IMAGE_URI" backend
+        fi
+  post_build:
+    commands:
+      - set -euo pipefail
+      - test "$CODEBUILD_BUILD_SUCCEEDING" = 1
+      # Schema first, at the same commit. A failure here blocks the deploy.
+      - |
+        bash backend/infra/run-migrations.sh --environment-variables-override \
+          name=MIGRATION_MODE,value=migrate,type=PLAINTEXT \
+          name=MIGRATION_CONFIRMATION,value=apply-schema-migrations,type=PLAINTEXT
+      - |
+        if [[ "$IMAGE_EXISTS" != "true" ]]; then
+          docker push "$IMAGE_URI"
+        fi
+      - printf '{"image":"%s"}\n' "$IMAGE_URI" > image-detail.json
+      - |
+        SERVICE_ARN="$(aws cloudformation describe-stacks \
+          --stack-name "$INFRA_STACK_NAME" \
+          --query "Stacks[0].Outputs[?OutputKey=='AppRunnerServiceArn'].OutputValue | [0]" \
+          --output text)"
+
+        if [[ -z "$SERVICE_ARN" || "$SERVICE_ARN" == "None" ]]; then
+          echo "Bootstrap image pushed; App Runner service has not been enabled yet."
+          exit 0
+        fi
+
+        aws apprunner describe-service --service-arn "$SERVICE_ARN" \
+          --query Service.SourceConfiguration --output json > source-configuration.json
+        jq --arg image "$IMAGE_URI" \
+          '.ImageRepository.ImageIdentifier = $image | .AutoDeploymentsEnabled = false' \
+          source-configuration.json > next-source-configuration.json
+
+        OPERATION_ID="$(aws apprunner update-service --service-arn "$SERVICE_ARN" \
+          --source-configuration file://next-source-configuration.json \
+          --query OperationId --output text)"
+
+        deadline=$((SECONDS + 1200))
+        while (( SECONDS < deadline )); do
+          STATUS="$(aws apprunner list-operations --service-arn "$SERVICE_ARN" \
+            --query "OperationSummaryList[?Id=='$OPERATION_ID'].Status | [0]" --output text)"
+          case "$STATUS" in
+            SUCCEEDED) break ;;
+            FAILED|ROLLBACK_SUCCEEDED|ROLLBACK_FAILED)
+              echo "App Runner deployment failed with status $STATUS" >&2
+              exit 1
+              ;;
+          esac
+          sleep 15
+        done
+        if [[ "${STATUS:-}" != "SUCCEEDED" ]]; then
+          echo "Timed out waiting for App Runner operation $OPERATION_ID" >&2
+          exit 1
+        fi
+
+        SERVICE_URL="$(aws apprunner describe-service --service-arn "$SERVICE_ARN" --query Service.ServiceUrl --output text)"
+        curl --fail --silent --show-error --retry 8 --retry-all-errors --retry-delay 5 "https://${SERVICE_URL}/healthz"
+
+artifacts:
+  files:
+    - image-detail.json

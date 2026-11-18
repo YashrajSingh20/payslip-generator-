@@ -1,0 +1,488 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Keystone Payroll API on App Runner (one stack per environment)
+
+# Same shape as the Team Portal API stack: a CodeBuild project builds an
+# immutable image per commit, starts a private migration CodeBuild project at
+# that commit, and only then updates App Runner. Deploy one stack for `test`
+# (branch: test) and one for `prod` (branch: main).
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [test, prod]
+  GitHubRepositoryUrl:
+    Type: String
+    Description: HTTPS URL of the payroll GitHub repository
+    AllowedPattern: '^https://github\.com/.+/.+(\.git)?$'
+  GitHubConnectionArn:
+    Type: String
+    Description: Authorized CodeConnections connection for GitHub
+    AllowedPattern: '^arn:aws[^:]*:codeconnections:[^:]+:[0-9]{12}:connection/.+$'
+  DeployBranch:
+    Type: String
+    Description: Branch whose pushes deploy this environment (test or main)
+    AllowedPattern: '^[A-Za-z0-9._/-]+$'
+  EnableService:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Enable only after InitialImageTag has been pushed to ECR
+  InitialImageTag:
+    Type: String
+    Default: bootstrap
+    AllowedPattern: '^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$'
+  FrontendOrigin:
+    Type: String
+    Description: Public payroll web origin (Vercel), without a trailing slash
+    AllowedPattern: '^https://[^/]+$'
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnets with NAT egress (App Runner connector and migration job)
+  DatabaseSecurityGroupId:
+    Type: String
+    Default: ''
+    Description: >-
+      Security group of the RDS instance. When set, this stack allows PostgreSQL from
+      the payroll API and migration job. Leave empty when the database already admits
+      the NAT addresses (the current test RDS does).
+  GmailOAuthClientId:
+    Type: String
+    NoEcho: true
+  GmailSenderEmail:
+    Type: String
+    AllowedPattern: '^[^@\s]+@[^@\s]+$'
+  GmailSenderName:
+    Type: String
+    Default: Keystone Commerce Payroll
+  TeamPortalOrigin:
+    Type: String
+    Default: ''
+    Description: Team Portal API origin for the employee sync (empty disables the sync)
+    AllowedPattern: '^(https://[^/]+)?$'
+  ContainerPort:
+    Type: String
+    Default: '8080'
+
+Conditions:
+  CreateService: !Equals [!Ref EnableService, 'true']
+  AllowDatabaseIngress: !Not [!Equals [!Ref DatabaseSecurityGroupId, '']]
+  IsTest: !Equals [!Ref Environment, test]
+
+Resources:
+  # Private payslip PDFs and uploaded logos. Same hardening as the Team Portal's
+  # private asset bucket; versioned because payslips are financial records.
+  PrivateAssetBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-replaced-versions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 90
+          - Id: abort-incomplete-multipart-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+      Tags:
+        - { Key: Application, Value: keystone-payroll }
+        - { Key: Environment, Value: !Ref Environment }
+
+  PrivateAssetBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref PrivateAssetBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource:
+              - !GetAtt PrivateAssetBucket.Arn
+              - !Sub '${PrivateAssetBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+
+  ApiRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub keystone-payroll/${Environment}-api
+      ImageTagMutability: IMMUTABLE
+      ImageScanningConfiguration: { ScanOnPush: true }
+      EncryptionConfiguration: { EncryptionType: AES256 }
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [{
+              "rulePriority": 1,
+              "description": "Keep the newest 30 API images",
+              "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 30 },
+              "action": { "type": "expire" }
+            }]
+          }
+      Tags:
+        - { Key: Application, Value: keystone-payroll }
+        - { Key: Environment, Value: !Ref Environment }
+
+  AppRunnerEcrAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub keystone-payroll-${Environment}-apprunner-ecr
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: build.apprunner.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSAppRunnerServicePolicyForECRAccess
+
+  AppRunnerInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub keystone-payroll-${Environment}-apprunner-instance
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: tasks.apprunner.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: read-runtime-parameters
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [ssm:GetParameter, ssm:GetParameters]
+                # Runtime secrets only. database-admin-url is readable by the migration job alone.
+                Resource:
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/keystone-payroll/${Environment}/database-url
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/keystone-payroll/${Environment}/jwt-secret
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/keystone-payroll/${Environment}/gmail-oauth-client-secret
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/keystone-payroll/${Environment}/gmail-oauth-refresh-token
+                  - !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/keystone-payroll/${Environment}/team-portal-sync-token
+        - PolicyName: access-private-assets
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub '${PrivateAssetBucket.Arn}/${Environment}/*'
+
+  ConnectorSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub keystone-payroll-${Environment}-apprunner
+      GroupDescription: Outbound access for the payroll API and its migration job
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+          Description: Egress through the VPC NAT gateways (RDS, Gmail, Team Portal)
+      Tags:
+        - { Key: Name, Value: !Sub 'keystone-payroll-${Environment}-apprunner' }
+        - { Key: Application, Value: keystone-payroll }
+        - { Key: Environment, Value: !Ref Environment }
+
+  DatabaseIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: AllowDatabaseIngress
+    Properties:
+      GroupId: !Ref DatabaseSecurityGroupId
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !GetAtt ConnectorSecurityGroup.GroupId
+      Description: !Sub Keystone payroll ${Environment} API and migrations
+
+  AppRunnerVpcConnector:
+    Type: AWS::AppRunner::VpcConnector
+    Properties:
+      VpcConnectorName: !Sub keystone-payroll-${Environment}
+      Subnets: !Ref SubnetIds
+      SecurityGroups: [!GetAtt ConnectorSecurityGroup.GroupId]
+
+  AutoScalingConfiguration:
+    Type: AWS::AppRunner::AutoScalingConfiguration
+    Properties:
+      AutoScalingConfigurationName: !Sub keystone-payroll-${Environment}
+      MaxConcurrency: 20
+      MinSize: 1
+      MaxSize: 2
+
+  CodeBuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/codebuild/keystone-payroll-${Environment}-api
+      RetentionInDays: !If [IsTest, 30, 90]
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub keystone-payroll-${Environment}-codebuild
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codebuild.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: build-and-deploy-api
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: EcrLogin
+                Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Sid: ReadGitHubSource
+                Effect: Allow
+                Action: [codeconnections:GetConnection, codeconnections:GetConnectionToken, codeconnections:UseConnection]
+                Resource: !Ref GitHubConnectionArn
+              - Sid: PushApiImage
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeImages
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource: !GetAtt ApiRepository.Arn
+              - Sid: DeployAppRunner
+                Effect: Allow
+                Action: [apprunner:DescribeService, apprunner:ListOperations, apprunner:UpdateService]
+                Resource: !Sub arn:${AWS::Partition}:apprunner:${AWS::Region}:${AWS::AccountId}:service/keystone-payroll-${Environment}-api/*
+              - Sid: PassEcrAccessRoleToAppRunner
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt AppRunnerEcrAccessRole.Arn
+              - Sid: FindService
+                Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*
+              - Sid: RunMigrations
+                Effect: Allow
+                Action: [codebuild:StartBuild, codebuild:BatchGetBuilds]
+                Resource: !GetAtt MigrationProject.Arn
+              - Sid: WriteBuildLogs
+                Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub ${CodeBuildLogGroup.Arn}:*
+
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub keystone-payroll-${Environment}-api
+      Description: Test, build, migrate and deploy the payroll API
+      ConcurrentBuildLimit: 1
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Source:
+        Type: GITHUB
+        Location: !Ref GitHubRepositoryUrl
+        GitCloneDepth: 1
+        BuildSpec: backend/infra/buildspec.yml
+        ReportBuildStatus: true
+        Auth:
+          Type: CODECONNECTIONS
+          Resource: !Ref GitHubConnectionArn
+      SourceVersion: !Sub refs/heads/${DeployBranch}
+      Triggers:
+        Webhook: true
+        FilterGroups:
+          - - Type: EVENT
+              Pattern: PUSH
+            - Type: HEAD_REF
+              Pattern: !Sub ^refs/heads/${DeployBranch}$
+            - Type: FILE_PATH
+              Pattern: '^(backend/|migrations/|scripts/(db-migrate\.mjs|lib/)|package\.json$|pnpm-lock\.yaml$)'
+      Artifacts: { Type: NO_ARTIFACTS }
+      Cache:
+        Type: LOCAL
+        Modes: [LOCAL_DOCKER_LAYER_CACHE]
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - { Name: AWS_ACCOUNT_ID, Value: !Ref AWS::AccountId }
+          - { Name: ECR_REPOSITORY_URI, Value: !GetAtt ApiRepository.RepositoryUri }
+          - { Name: MIGRATION_PROJECT_NAME, Value: !Ref MigrationProject }
+          - { Name: INFRA_STACK_NAME, Value: !Ref AWS::StackName }
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref CodeBuildLogGroup
+          StreamName: build
+      TimeoutInMinutes: 30
+      QueuedTimeoutInMinutes: 30
+
+  MigrationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub keystone-payroll-${Environment}-migrations
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codebuild.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: migrate-database
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [codeconnections:GetConnection, codeconnections:GetConnectionToken, codeconnections:UseConnection]
+                Resource: !Ref GitHubConnectionArn
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/keystone-payroll/${Environment}/database-admin-url
+              - Effect: Allow
+                Action: [ec2:CreateNetworkInterface, ec2:DescribeDhcpOptions, ec2:DescribeNetworkInterfaces, ec2:DeleteNetworkInterface, ec2:DescribeSubnets, ec2:DescribeSecurityGroups, ec2:DescribeVpcs]
+                Resource: '*'
+              - Effect: Allow
+                Action: ec2:CreateNetworkInterfacePermission
+                Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:network-interface/*
+                Condition:
+                  StringEquals:
+                    ec2:AuthorizedService: codebuild.amazonaws.com
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub ${CodeBuildLogGroup.Arn}:*
+
+  MigrationProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub keystone-payroll-${Environment}-migrations
+      Description: Payroll schema migrations, run by the deploy build before every release
+      ConcurrentBuildLimit: 1
+      ServiceRole: !GetAtt MigrationRole.Arn
+      Source:
+        Type: GITHUB
+        Location: !Ref GitHubRepositoryUrl
+        GitCloneDepth: 1
+        BuildSpec: backend/infra/migration-buildspec.yml
+        Auth:
+          Type: CODECONNECTIONS
+          Resource: !Ref GitHubConnectionArn
+      SourceVersion: !Sub refs/heads/${DeployBranch}
+      Artifacts: { Type: NO_ARTIFACTS }
+      VpcConfig:
+        VpcId: !Ref VpcId
+        Subnets: !Ref SubnetIds
+        SecurityGroupIds: [!GetAtt ConnectorSecurityGroup.GroupId]
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:7.0
+        EnvironmentVariables:
+          - { Name: MIGRATION_DATABASE_URL_PARAMETER, Value: !Sub '/keystone-payroll/${Environment}/database-admin-url' }
+          - { Name: DEPLOY_ENVIRONMENT, Value: !Ref Environment }
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref CodeBuildLogGroup
+          StreamName: migrations
+      TimeoutInMinutes: 10
+      QueuedTimeoutInMinutes: 10
+
+  AppRunnerService:
+    Type: AWS::AppRunner::Service
+    Condition: CreateService
+    Properties:
+      ServiceName: !Sub keystone-payroll-${Environment}-api
+      SourceConfiguration:
+        AutoDeploymentsEnabled: false
+        AuthenticationConfiguration:
+          AccessRoleArn: !GetAtt AppRunnerEcrAccessRole.Arn
+        ImageRepository:
+          ImageIdentifier: !Sub ${ApiRepository.RepositoryUri}:${InitialImageTag}
+          ImageRepositoryType: ECR
+          ImageConfiguration:
+            Port: !Ref ContainerPort
+            RuntimeEnvironmentVariables:
+              - { Name: NODE_ENV, Value: production }
+              - { Name: APP_ENV, Value: !Ref Environment }
+              - { Name: DATABASE_POOL_MAX, Value: '5' }
+              - { Name: DATABASE_SSL_CA_FILE, Value: /app/certs/ap-south-1-rds-ca.pem }
+              - { Name: ALLOWED_ORIGINS, Value: !Ref FrontendOrigin }
+              - { Name: PORTAL_URL, Value: !Ref FrontendOrigin }
+              - { Name: PORTAL_TIMEZONE, Value: Asia/Kolkata }
+              - { Name: GMAIL_OAUTH_CLIENT_ID, Value: !Ref GmailOAuthClientId }
+              - { Name: GMAIL_SENDER_EMAIL, Value: !Ref GmailSenderEmail }
+              - { Name: GMAIL_SENDER_NAME, Value: !Ref GmailSenderName }
+              - { Name: EMAIL_WORKER_ENABLED, Value: 'true' }
+              - { Name: TEAM_PORTAL_ORIGIN, Value: !Ref TeamPortalOrigin }
+              - { Name: TEAM_PORTAL_SYNC_MINUTES, Value: '60' }
+              - { Name: PRIVATE_ASSET_BUCKET, Value: !Ref PrivateAssetBucket }
+              - { Name: AWS_REGION, Value: !Ref AWS::Region }
+            RuntimeEnvironmentSecrets:
+              - { Name: DATABASE_URL, Value: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/keystone-payroll/${Environment}/database-url' }
+              - { Name: JWT_SECRET, Value: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/keystone-payroll/${Environment}/jwt-secret' }
+              - { Name: GMAIL_OAUTH_CLIENT_SECRET, Value: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/keystone-payroll/${Environment}/gmail-oauth-client-secret' }
+              - { Name: GMAIL_OAUTH_REFRESH_TOKEN, Value: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/keystone-payroll/${Environment}/gmail-oauth-refresh-token' }
+              - { Name: TEAM_PORTAL_SYNC_TOKEN, Value: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/keystone-payroll/${Environment}/team-portal-sync-token' }
+      InstanceConfiguration:
+        Cpu: '256'
+        Memory: '512'
+        InstanceRoleArn: !GetAtt AppRunnerInstanceRole.Arn
+      AutoScalingConfigurationArn: !GetAtt AutoScalingConfiguration.AutoScalingConfigurationArn
+      HealthCheckConfiguration:
+        Protocol: HTTP
+        Path: /healthz
+        Interval: 10
+        Timeout: 5
+        HealthyThreshold: 1
+        UnhealthyThreshold: 5
+      NetworkConfiguration:
+        EgressConfiguration:
+          EgressType: VPC
+          VpcConnectorArn: !GetAtt AppRunnerVpcConnector.VpcConnectorArn
+        IngressConfiguration:
+          IsPubliclyAccessible: true
+        IpAddressType: IPV4
+      Tags:
+        - { Key: Application, Value: keystone-payroll }
+        - { Key: Environment, Value: !Ref Environment }
+
+Outputs:
+  PrivateAssetBucketName:
+    Value: !Ref PrivateAssetBucket
+  EcrRepositoryUri:
+    Value: !GetAtt ApiRepository.RepositoryUri
+  CodeBuildProjectName:
+    Value: !Ref BuildProject
+  MigrationProjectName:
+    Value: !Ref MigrationProject
+  ConnectorSecurityGroupId:
+    Value: !GetAtt ConnectorSecurityGroup.GroupId
+  AppRunnerServiceArn:
+    Condition: CreateService
+    Value: !GetAtt AppRunnerService.ServiceArn
+  AppRunnerServiceUrl:
+    Condition: CreateService
+    Value: !Sub https://${AppRunnerService.ServiceUrl}

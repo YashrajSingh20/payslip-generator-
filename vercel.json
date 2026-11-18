@@ -1,0 +1,5 @@
+{
+  "fluid": true,
+  "regions": ["bom1"],
+  "ignoreCommand": "git diff HEAD^ HEAD --quiet -- . ':(exclude)backend/**'"
+}
