@@ -13,6 +13,18 @@ import { ErrorNote, Field } from './ui';
 
 const RESEND_SECONDS = 45;
 
+
+/** Keystone | Liwip, sized so the two wordmarks read at the same height. */
+function LogoPair() {
+  return (
+    <div className="flex items-center gap-4">
+      <img src="/brand/logo-keystone.png" alt="Keystone Commerce" className="h-8 w-auto" />
+      <span className="h-7 w-px bg-ink/20" aria-hidden />
+      <img src="/brand/logo-liwip-light.png" alt="Liwip, Live With Pride" className="h-9 w-auto" />
+    </div>
+  );
+}
+
 function OtpSlot({ char, isActive, hasFakeCaret }) {
   return (
     <div
@@ -74,46 +86,32 @@ export function LoginScreen() {
   }
 
   return (
-    <div className="relative grid min-h-dvh lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
+    <div className="relative flex min-h-dvh flex-col">
       <AmbientGlow />
-      {/* Brand panel */}
-      <aside className="relative hidden flex-col justify-between p-12 lg:flex">
-        <img src="/brand/logo-liwip-light.png" alt="Liwip, Live With Pride" className="h-16 w-auto self-start" />
+      <div className="mx-auto flex w-full max-w-[1180px] flex-1 flex-col px-6 sm:px-10">
+        {/* Phones: logos at the top. Larger screens show them above the title. */}
+        <header className="pt-[max(1.75rem,env(safe-area-inset-top))] lg:hidden">
+          <LogoPair />
+        </header>
 
-        <h2 className="font-display text-[56px] leading-[1.02] tracking-[-0.01em] text-ink">
-          Keystone <em className="text-ember-500">Payroll</em>
-        </h2>
+        <div className="grid flex-1 content-start gap-8 pb-8 pt-14 sm:content-center sm:pt-8 lg:grid-cols-[minmax(0,1fr)_400px] lg:content-normal lg:items-center lg:gap-20 lg:py-16">
+          <h2 className="font-display text-[44px] leading-none tracking-[-0.01em] text-ink sm:mx-auto sm:w-full sm:max-w-[400px] lg:hidden">
+            Keystone <em className="text-ember-500">Payroll</em>
+          </h2>
 
-        {/* Abstract payslip */}
-        <div className="glass w-full max-w-sm rounded-2xl p-5">
-          <div className="flex items-center justify-between text-[11px] font-medium uppercase tracking-[0.1em] text-ink-3">
-            <span>Payslip · July 2026</span>
-            <span className="num">10003</span>
-          </div>
-          <div className="mt-4 space-y-2.5">
-            {[72, 54, 64, 40].map((w, i) => (
-              <div key={i} className="flex items-center justify-between gap-6">
-                <span className="h-1.5 rounded-full bg-ink/10" style={{ width: `${w}%` }} />
-                <span className="h-1.5 w-14 rounded-full bg-ink/20" />
-              </div>
-            ))}
-          </div>
-          <div className="mt-5 flex items-center justify-between rounded-xl bg-cocoa-2 px-4 py-3 text-[13px] font-semibold text-white">
-            <span className="text-white/70">NET PAY</span>
-            <span className="num">₹34,980.00</span>
-          </div>
-        </div>
-      </aside>
+          {/* Brand side */}
+          <section className="hidden lg:block">
+            <LogoPair />
+            <h2 className="mt-10 font-display text-[72px] leading-[0.95] tracking-[-0.02em] text-ink xl:text-[84px]">
+              Keystone <em className="text-ember-500">Payroll</em>
+            </h2>
+          </section>
 
-      {/* Form */}
-      <main className="relative flex flex-col px-6 py-10 sm:px-12">
-        <img src="/brand/logo-keystone.png" alt="Keystone Commerce" className="h-9 w-auto self-start" />
-
-        <div className="glass mx-auto my-auto w-full max-w-sm rounded-3xl p-8">
+        <div className="w-full sm:glass sm:mx-auto sm:max-w-[400px] sm:rounded-3xl sm:p-10 lg:mx-0 lg:justify-self-end">
           {step === 'email' ? (
             <form onSubmit={sendCode} className="animate-pop-in">
-              <h1 className="font-display text-[38px] leading-tight">Sign in</h1>
-              <Field label="Work email" htmlFor="email" className="mt-8">
+              <h1 className="font-display text-[40px] leading-none max-sm:sr-only">Sign in</h1>
+              <Field label="Work email" htmlFor="email" className="sm:mt-8">
                 <Input
                   id="email"
                   type="email"
@@ -123,11 +121,11 @@ export function LoginScreen() {
                   placeholder="you@keystonecommerce.in"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="h-11 text-[15px]"
+                  className="h-12 text-[16px] sm:h-11 sm:text-[15px]"
                 />
               </Field>
               <ErrorNote error={error} className="mt-4" />
-              <Button type="submit" variant="dark" size="lg" className="mt-5 w-full" loading={pending} disabled={!email}>
+              <Button type="submit" variant="dark" size="lg" className="mt-5 h-12 w-full sm:h-11" loading={pending}>
                 Continue <ArrowRight />
               </Button>
             </form>
@@ -139,8 +137,8 @@ export function LoginScreen() {
               <div className="mb-5 grid size-11 place-items-center rounded-xl bg-ember-50 text-ember-600">
                 <Mail className="size-5" />
               </div>
-              <h1 className="font-display text-[38px] leading-tight">Enter code</h1>
-              <p className="mt-1.5 text-[14px] text-ink-3">Sent to {email}</p>
+              <h1 className="font-display text-[40px] leading-none">Enter code</h1>
+              <p className="mt-2 text-[14px] text-ink-3">Sent to <span className="font-medium text-ink-2">{email}</span></p>
               <OTPInput
                 maxLength={6}
                 value={code}
@@ -157,7 +155,7 @@ export function LoginScreen() {
                 )}
               />
               <ErrorNote error={error} className="mt-4" />
-              <Button variant="dark" size="lg" className="mt-5 w-full" loading={pending} disabled={code.length !== 6} onClick={() => verify()}>
+              <Button variant="dark" size="lg" className="mt-5 h-12 w-full sm:h-11" loading={pending} onClick={() => verify()}>
                 Sign in
               </Button>
               <div className="mt-4 text-center text-[13px] text-ink-3">
@@ -176,8 +174,12 @@ export function LoginScreen() {
           )}
         </div>
 
-        <p className="text-[12px] text-ink-4">Keystone Commerce Private Limited</p>
-      </main>
+        </div>
+
+        <footer className="flex justify-center border-t border-ink/[0.06] pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-6 text-[12px] text-ink-4 lg:justify-start">
+          <span>© {new Date().getFullYear()} Keystone Commerce Private Limited</span>
+        </footer>
+      </div>
     </div>
   );
 }
