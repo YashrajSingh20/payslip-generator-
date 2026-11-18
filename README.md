@@ -112,3 +112,11 @@ migrations/          numbered SQL, applied in order by scripts/db-migrate.mjs
 - Uploading workbooks to S3 via presigned URLs (they are sent as base64, max 4 MB)
 - Employee self-service (employees signing in to see their own payslips)
 - Playwright E2E tests
+
+## Deployment
+
+Production runs on AWS (App Runner, RDS, S3, CodeBuild) with the web app on
+Vercel; every push to `main` tests, migrates and deploys. The full runbook,
+including the database setup, secrets and first admin, is in
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Deployment inputs:
+[backend/infra/production.env.example](backend/infra/production.env.example).

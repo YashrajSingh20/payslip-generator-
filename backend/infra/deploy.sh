@@ -7,7 +7,14 @@
 # change infrastructure; code deploys happen on every push to DEPLOY_BRANCH.
 #
 #   bash backend/infra/deploy.sh
+#
+# Settings come from backend/infra/production.env (see production.env.example)
+# or from the environment. Secrets must already be in SSM: run
+# backend/infra/create-secrets.sh first.
 set -euo pipefail
+
+ENV_FILE="${ENV_FILE:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/production.env}"
+if [[ -f "$ENV_FILE" ]]; then set -a; source "$ENV_FILE"; set +a; fi
 
 AWS_REGION="${AWS_REGION:-ap-south-1}"
 ENVIRONMENT=prod
@@ -22,7 +29,7 @@ done
 # The API and migration job read these at runtime; the stack never sees the values.
 for parameter in database-url database-admin-url jwt-secret gmail-oauth-client-secret gmail-oauth-refresh-token team-portal-sync-token; do
   if ! aws ssm get-parameter --region "$AWS_REGION" --name "/keystone-payroll/${ENVIRONMENT}/${parameter}" >/dev/null 2>&1; then
-    echo "Missing SSM SecureString /keystone-payroll/${ENVIRONMENT}/${parameter} (see docs/DEPLOYMENT.md)" >&2
+    echo "Missing SSM SecureString /keystone-payroll/${ENVIRONMENT}/${parameter}. Run backend/infra/create-secrets.sh first." >&2
     exit 1
   fi
 done

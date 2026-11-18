@@ -6,6 +6,9 @@
 #   MIGRATION_MODE=status   list applied / pending files (default, read-only)
 #   MIGRATION_MODE=migrate  apply pending files; needs
 #                           MIGRATION_CONFIRMATION=apply-schema-migrations
+#   MIGRATION_MODE=bootstrap-admin  create the first super admin; needs
+#                           ADMIN_EMAIL and ADMIN_NAME
+#   MIGRATION_MODE=list-admins      list super admins (read-only)
 version: 0.2
 
 env:
@@ -37,5 +40,12 @@ phases:
             node scripts/db-migrate.mjs
             node scripts/db-migrate.mjs --status
             ;;
+          bootstrap-admin)
+            [[ -n "${ADMIN_EMAIL:-}" && -n "${ADMIN_NAME:-}" ]] || {
+              echo "ADMIN_EMAIL and ADMIN_NAME are required" >&2; exit 2;
+            }
+            node scripts/bootstrap-admin.mjs --email="$ADMIN_EMAIL" --name="$ADMIN_NAME"
+            ;;
+          list-admins) node scripts/bootstrap-admin.mjs --list ;;
           *) echo "Unsupported MIGRATION_MODE" >&2; exit 2 ;;
         esac

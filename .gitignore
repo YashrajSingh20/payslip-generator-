@@ -12,5 +12,6 @@ test-results/
 playwright-report/
 backend/.dev-mail/
 backend/.dev-storage/
+backend/infra/production.env
 *.tsbuildinfo
 next-env.d.ts
