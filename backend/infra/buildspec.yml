@@ -1,7 +1,5 @@
-# Build -> migrate -> deploy for the payroll API. One CodeBuild project per
-# environment runs this file on every push to its branch:
-#   test branch -> keystone-payroll-test-api
-#   main branch -> keystone-payroll-prod-api
+# Build -> migrate -> deploy for the payroll API. CodeBuild project
+# keystone-payroll-prod-api runs this file on every push to `main`.
 # Order matters: tests, image build, schema migrations, image push, App Runner
 # update, smoke test. A failed step stops the release. Migrations run before
 # the new code, so every migration must also work with the currently running API.

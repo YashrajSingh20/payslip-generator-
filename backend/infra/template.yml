@@ -1,15 +1,16 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Keystone Payroll API on App Runner (one stack per environment)
+Description: Keystone Payroll API on App Runner (production, deployed from main)
 
 # Same shape as the Team Portal API stack: a CodeBuild project builds an
 # immutable image per commit, starts a private migration CodeBuild project at
-# that commit, and only then updates App Runner. Deploy one stack for `test`
-# (branch: test) and one for `prod` (branch: main).
+# that commit, and only then updates App Runner. Payroll has a single
+# environment: every push to `main` deploys production.
 
 Parameters:
   Environment:
     Type: String
-    AllowedValues: [test, prod]
+    Default: prod
+    AllowedValues: [prod]
   GitHubRepositoryUrl:
     Type: String
     Description: HTTPS URL of the payroll GitHub repository
@@ -20,7 +21,8 @@ Parameters:
     AllowedPattern: '^arn:aws[^:]*:codeconnections:[^:]+:[0-9]{12}:connection/.+$'
   DeployBranch:
     Type: String
-    Description: Branch whose pushes deploy this environment (test or main)
+    Default: main
+    Description: Branch whose pushes deploy production
     AllowedPattern: '^[A-Za-z0-9._/-]+$'
   EnableService:
     Type: String
@@ -46,7 +48,7 @@ Parameters:
     Description: >-
       Security group of the RDS instance. When set, this stack allows PostgreSQL from
       the payroll API and migration job. Leave empty when the database already admits
-      the NAT addresses (the current test RDS does).
+      the NAT addresses.
   GmailOAuthClientId:
     Type: String
     NoEcho: true
@@ -68,7 +70,6 @@ Parameters:
 Conditions:
   CreateService: !Equals [!Ref EnableService, 'true']
   AllowDatabaseIngress: !Not [!Equals [!Ref DatabaseSecurityGroupId, '']]
-  IsTest: !Equals [!Ref Environment, test]
 
 Resources:
   # Private payslip PDFs and uploaded logos. Same hardening as the Team Portal's
@@ -235,7 +236,7 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/codebuild/keystone-payroll-${Environment}-api
-      RetentionInDays: !If [IsTest, 30, 90]
+      RetentionInDays: 90
 
   CodeBuildRole:
     Type: AWS::IAM::Role

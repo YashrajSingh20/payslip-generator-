@@ -1,38 +1,30 @@
 # Deployment
 
-Payroll ships the same way as the Team Portal: work goes to the `test` branch
-first, AWS builds and deploys it to the test environment, and once it is checked
-it is merged to `main`, which deploys production. Database migrations run
-automatically inside that pipeline, before the new code goes live.
+Payroll has one environment, production, deployed from `main`. Work happens on
+a feature branch, is reviewed in a pull request, and deploys itself when it is
+merged. Database migrations run automatically inside that pipeline, before the
+new code goes live, the same way the Team Portal's pipeline does it.
 
 ```text
-feature branch ──PR──▶ test ──push──▶ CodeBuild keystone-payroll-test-api
+feature branch ──PR──▶ main ──push──▶ CodeBuild keystone-payroll-prod-api
                                         1. backend tests
                                         2. Docker image tagged with the commit SHA
-                                        3. CodeBuild keystone-payroll-test-migrations  ◀── migrations/*.sql
+                                        3. CodeBuild keystone-payroll-prod-migrations  ◀── migrations/*.sql
                                         4. push image, update App Runner, GET /healthz
-                 test ──PR──▶ main ──push──▶ CodeBuild keystone-payroll-prod-api (same 4 steps, prod database)
 
-Vercel (web app): test branch ▶ test URL, main ▶ production URL. /api/* is forwarded to the App Runner API.
+Vercel (web app): main ▶ production. /api/* is forwarded to the App Runner API.
 ```
 
 A failed test, migration or health check stops the release; the running API is
-not touched.
-
-## Branches
-
-| Branch | Deploys to | Who merges |
-|---|---|---|
-| `feat/...` | nothing | you |
-| `test` | test API + test web app, test database | PR from a feature branch |
-| `main` | production API + web app, production database | PR from `test` after checking it |
+not touched. Check changes locally (`pnpm ci`, and a run through the app) before
+merging, because `main` is production.
 
 ## Migrations
 
 - Files live in `migrations/` as `NNN_short_name.sql` and run in number order,
   each in its own transaction. Applied files are recorded in `schema_migrations`,
   so each file runs once per database.
-- **Never edit a file that has been merged to `test`.** Add a new file instead.
+- **Never edit a file that has been merged to `main`.** Add a new file instead.
 - Migrations run **before** the new API starts, while the old API is still
   serving. Each one must work with the code that is currently live: add columns
   with defaults, add tables, backfill; remove or rename things in a later release.
@@ -61,7 +53,7 @@ pnpm db:migrate
 ```
 
 To see the state of an AWS database without changing it, start the
-`keystone-payroll-<env>-migrations` CodeBuild project with no overrides (it
+`keystone-payroll-prod-migrations` CodeBuild project with no overrides (it
 defaults to `MIGRATION_MODE=status`).
 
 ## API endpoints
@@ -145,25 +137,25 @@ Payroll calls it server-to-server every 60 minutes and when someone presses
 | `PRIVATE_ASSET_BUCKET` | blank | Blank stores files in `backend/.dev-storage`; set it to test against a real bucket |
 | `AWS_REGION` | `ap-south-1` | Only used with a bucket |
 
-### AWS (per environment, `<env>` is `test` or `prod`)
+### AWS
 
 Create these SSM **SecureString** parameters in `ap-south-1` before deploying.
 Values never go in Git or in the stack.
 
 | Parameter | Used by | Value |
 |---|---|---|
-| `/keystone-payroll/<env>/database-url` | API | Runtime role, e.g. `postgres://payroll_app:…@<rds-host>:5432/keystone_payroll` |
-| `/keystone-payroll/<env>/database-admin-url` | migration job only | Role that may run DDL on the same database |
-| `/keystone-payroll/<env>/jwt-secret` | API | 32+ random chars, different per environment |
-| `/keystone-payroll/<env>/gmail-oauth-client-secret` | API | Gmail OAuth |
-| `/keystone-payroll/<env>/gmail-oauth-refresh-token` | API | Gmail OAuth |
-| `/keystone-payroll/<env>/team-portal-sync-token` | API | 32+ random chars |
+| `/keystone-payroll/prod/database-url` | API | Runtime role, e.g. `postgres://payroll_app:…@<rds-host>:5432/keystone_payroll` |
+| `/keystone-payroll/prod/database-admin-url` | migration job only | Role that may run DDL on the same database |
+| `/keystone-payroll/prod/jwt-secret` | API | 32+ random chars |
+| `/keystone-payroll/prod/gmail-oauth-client-secret` | API | Gmail OAuth |
+| `/keystone-payroll/prod/gmail-oauth-refresh-token` | API | Gmail OAuth |
+| `/keystone-payroll/prod/team-portal-sync-token` | API | 32+ random chars |
 
 And in the Team Portal account/stack, the same token:
 
 | Parameter | Value |
 |---|---|
-| `/keystone-team-portal/<env>/payroll-sync-token` | identical to `/keystone-payroll/<env>/team-portal-sync-token` |
+| `/keystone-team-portal/<env>/payroll-sync-token` | identical to `/keystone-payroll/prod/team-portal-sync-token` |
 
 Plain settings are stack parameters (see `backend/infra/deploy.sh`):
 `FRONTEND_ORIGIN`, `VPC_ID`, `SUBNET_IDS`, `DATABASE_SECURITY_GROUP_ID`
@@ -176,16 +168,16 @@ The stack creates the S3 bucket itself and passes `PRIVATE_ASSET_BUCKET` and
 
 The same model as the Team Portal's private files:
 
-- One private, encrypted, versioned bucket per environment, TLS only, no public
-  access. The API may read and write only under its own `test/` or `prod/` prefix.
+- One private, encrypted, versioned bucket, TLS only, no public access. The API
+  may read and write only under its `prod/` prefix.
 - Every file has a row in `private_objects` (purpose, key, name, type, size,
   SHA-256). The key never leaves the server; pages use the row id.
 - Downloads go through a permission check, then a 60-second signed link.
 - **Payslip PDFs:** when a run is approved, every payslip is rendered once and
-  stored under `<env>/payslip_pdf/<run>/`. Downloads, the ZIP and the email
+  stored under `prod/payslip_pdf/<run>/`. Downloads, the ZIP and the email
   attachment all use that stored file, so what was approved is what is sent.
 - **Logos:** Settings → Logos uploads PNG/JPEG files (2 MB max, checked by
-  content) under `<env>/brand_logo/`. New runs print them; older runs keep theirs.
+  content) under `prod/brand_logo/`. New runs print them; older runs keep theirs.
 - Locally, with no bucket, the same code writes to `backend/.dev-storage/`.
 
 ## Roles
@@ -198,7 +190,7 @@ admin always has every permission, so no one can lock the team out.
 ## First user
 
 Sign-in only works for emails already in the database, so create the first
-super admin once per environment, after migrations have run:
+super admin once, after the first deploy has run the migrations:
 
 ```bash
 pnpm bootstrap-admin -- --email=finance@keystonecommerce.in --name="Finance Admin"
@@ -208,7 +200,7 @@ pnpm bootstrap-admin -- --email=finance@keystonecommerce.in --name="Finance Admi
 pnpm bootstrap-admin -- --list
 ```
 
-Against AWS, run it with that environment's admin URL in `DATABASE_ADMIN_URL`
+Against AWS, run it with the admin URL in `DATABASE_ADMIN_URL`
 and `DATABASE_SSL_CA_FILE=backend/ap-south-1-rds-ca.pem`, from a machine that
 can reach the database. Running it again with the same email only updates the
 name and re-activates the account. Everyone else is added from Team & access.
@@ -217,43 +209,44 @@ name and re-activates the account. Everyone else is added from Team & access.
 
 | Variable | Value |
 |---|---|
-| `BACKEND_ORIGIN` | The `AppRunnerServiceUrl` stack output for that environment (server-only) |
+| `BACKEND_ORIGIN` | The `AppRunnerServiceUrl` stack output (server-only) |
 
 ## First-time setup
 
-1. **Repository.** Push this project to GitHub with `main` and `test` branches.
-   CodeBuild uses the same CodeConnections GitHub connection as the Team Portal.
-2. **Database.** Create a `keystone_payroll` database on the environment's RDS
+1. **Repository.** Push this project to GitHub (`main`). CodeBuild uses the same
+   CodeConnections GitHub connection as the Team Portal; make sure that
+   connection can see this repository.
+2. **Database.** Create a `keystone_payroll` database on the production RDS
    instance, an admin role (owns the schema) and a runtime role (read/write data).
-3. **Secrets.** Create the SSM parameters above, and the Team Portal's
-   `payroll-sync-token`.
-4. **Team Portal.** Merge its `feat/payroll-employee-export` branch through `test`
-   then `main`. Its stack update adds `PAYROLL_SYNC_TOKEN` to App Runner, which
-   turns `/api/integrations/employees` on.
-5. **Payroll test stack:**
+3. **Secrets.** Create the SSM parameters above, including the Team Portal's
+   `/keystone-team-portal/prod/payroll-sync-token`.
+4. **Team Portal.** Its PR goes `test` then `main` as usual; after each merge
+   apply its stack update so App Runner gets `PAYROLL_SYNC_TOKEN` (see that PR).
+5. **Payroll stack:**
 
    ```bash
-   ENVIRONMENT=test DEPLOY_BRANCH=test \
-   GITHUB_REPOSITORY_URL=https://github.com/keystone-commerce/<payroll-repo>.git \
+   GITHUB_REPOSITORY_URL=https://github.com/<owner>/keystone-payroll.git \
    GITHUB_CONNECTION_ARN=arn:aws:codeconnections:ap-south-1:<account>:connection/<id> \
-   FRONTEND_ORIGIN=https://<payroll-test>.vercel.app \
+   FRONTEND_ORIGIN=https://<payroll-domain> \
    VPC_ID=vpc-... SUBNET_IDS=subnet-a,subnet-b,subnet-c \
+   DATABASE_SECURITY_GROUP_ID=sg-...   # optional, see template \
    GMAIL_OAUTH_CLIENT_ID=... GMAIL_SENDER_EMAIL=payroll@keystonecommerce.in \
-   TEAM_PORTAL_ORIGIN=https://<team-portal-test-api> \
+   TEAM_PORTAL_ORIGIN=https://<team-portal-prod-api> \
    bash backend/infra/deploy.sh
    ```
 
-   The first run creates ECR and CodeBuild, builds the `test` branch (running all
+   The first run creates ECR and CodeBuild, builds `main` (running all
    migrations on the empty database), then creates App Runner from that image.
-6. **Vercel.** Set `BACKEND_ORIGIN` to the printed URL on the test project.
+6. **Vercel.** Create the payroll project from this repo (production branch
+   `main`) and set `BACKEND_ORIGIN` to the printed URL.
 7. **First admin.** Create it as shown in [First user](#first-user).
-8. Repeat 5–7 with `ENVIRONMENT=prod DEPLOY_BRANCH=main` and production values.
 
-After that, every merge to `test` or `main` deploys itself, migrations included.
+After that, every merge to `main` deploys itself, migrations included.
 
 ## Before merging to `main`
 
-- [ ] The test deploy succeeded (CodeBuild `keystone-payroll-test-api` is green).
-- [ ] New migrations ran on test (`keystone-payroll-test-migrations` log).
-- [ ] Upload, review, approve and email a test run on the test site.
-- [ ] Team Portal sync shows "Synced … · N linked employees" on test.
+- [ ] `pnpm ci` passes locally.
+- [ ] New migrations work with the API that is currently live (they run first).
+- [ ] Upload, review, approve and email a run locally.
+- [ ] After the deploy: CodeBuild `keystone-payroll-prod-api` is green and the
+      Employees page shows the Team Portal sync working.

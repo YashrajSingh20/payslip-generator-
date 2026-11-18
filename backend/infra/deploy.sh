@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
-# Creates or updates the payroll API stack for one environment.
+# Creates or updates the payroll API stack (production, deployed from main).
 #
 # First run is two-phase, like the Team Portal: the stack is created without
 # App Runner, CodeBuild pushes the first image (running migrations on the way),
 # then the stack is updated to create App Runner from that image. Later runs only
 # change infrastructure; code deploys happen on every push to DEPLOY_BRANCH.
 #
-#   ENVIRONMENT=test DEPLOY_BRANCH=test bash backend/infra/deploy.sh
-#   ENVIRONMENT=prod DEPLOY_BRANCH=main bash backend/infra/deploy.sh
+#   bash backend/infra/deploy.sh
 set -euo pipefail
 
 AWS_REGION="${AWS_REGION:-ap-south-1}"
-ENVIRONMENT="${ENVIRONMENT:?ENVIRONMENT must be test or prod}"
-DEPLOY_BRANCH="${DEPLOY_BRANCH:?DEPLOY_BRANCH is required (test or main)}"
+ENVIRONMENT=prod
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 STACK_NAME="${STACK_NAME:-keystone-payroll-${ENVIRONMENT}-api}"
 TEMPLATE_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/template.yml"
 
@@ -92,4 +91,4 @@ deploy_stack true "$image_tag"
 url="$(stack_output AppRunnerServiceUrl)"
 curl --fail --silent --show-error --retry 8 --retry-all-errors --retry-delay 5 "${url}/healthz" >/dev/null
 echo "Healthy: ${url}"
-echo "Set BACKEND_ORIGIN=${url} on the Vercel project for ${ENVIRONMENT}."
+echo "Set BACKEND_ORIGIN=${url} on the payroll Vercel project."
