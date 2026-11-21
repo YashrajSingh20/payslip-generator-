@@ -165,7 +165,9 @@ Environment variables App Runner gets (set by the stack, nothing to do by hand):
 
 For a frontend-only preview before the API is deployed, set `FRONTEND_ONLY=true`
 in Vercel and leave `BACKEND_ORIGIN` unset. The UI opens directly as a demo viewer
-with empty lists and preview settings, without making API requests. Uploads,
+with one fictitious employee, a downloadable sample payslip and preview settings,
+without making API requests. Regenerate the bundled PDF and ZIP with
+`node backend/scripts/make-demo-payslip.mjs`. Uploads,
 changes and emails are disabled. This does not create a real authenticated session.
 Once the API is live,
 set `BACKEND_ORIGIN` to its HTTPS origin and remove `FRONTEND_ONLY`, then redeploy.

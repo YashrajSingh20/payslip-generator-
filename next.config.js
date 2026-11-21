@@ -32,7 +32,10 @@ export default {
     return {
       beforeFiles: apiBackendOrigin
         ? [{ source: '/api/:path*', destination: `${apiBackendOrigin}/api/:path*` }]
-        : [],
+        : frontendOnly ? [
+          { source: '/api/payslips/demo-aarav-kapoor/pdf', destination: '/demo/payslip.pdf' },
+          { source: '/api/payroll-runs/demo-oct-2026/payslips.zip', destination: '/demo/payslips.zip' },
+        ] : [],
       afterFiles: [],
       fallback: [],
     };

@@ -1,4 +1,5 @@
 // Used only by an explicitly enabled frontend-only build. No real session or API access.
+import { DEMO_EMPLOYEE, DEMO_PAYSLIP, DEMO_RUN } from './demo-payslip.js';
 export const PREVIEW_USER = {
   id: 'frontend-preview',
   name: 'Demo viewer',
@@ -24,8 +25,15 @@ export function previewResponse(path, method = 'GET') {
   const pathname = new URL(path, 'https://preview.example.test').pathname;
   switch (pathname) {
     case '/api/auth/me': return structuredClone({ user: PREVIEW_USER });
-    case '/api/payroll-runs': return { items: [] };
-    case '/api/employees': return { items: [], total: 0, nextCursor: null };
+    case '/api/payroll-runs': return structuredClone({ items: [DEMO_RUN] });
+    case `/api/payroll-runs/${DEMO_RUN.id}`: return structuredClone(DEMO_RUN);
+    case `/api/payroll-runs/${DEMO_RUN.id}/payslips`: return structuredClone({ items: [DEMO_PAYSLIP] });
+    case `/api/payslips/${DEMO_PAYSLIP.id}`: return structuredClone(DEMO_PAYSLIP);
+    case '/api/employees': {
+      const query = new URL(path, 'https://preview.example.test').searchParams.get('q')?.trim().toLowerCase() ?? '';
+      const items = Object.values(DEMO_EMPLOYEE).some((v) => typeof v === 'string' && v.toLowerCase().includes(query)) ? [DEMO_EMPLOYEE] : [];
+      return structuredClone({ items, total: items.length, nextCursor: null });
+    }
     case '/api/users': return { items: [] };
     case '/api/roles': return structuredClone({ items: ROLES });
     case '/api/team-portal-sync': return { enabled: false };
