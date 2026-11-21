@@ -166,6 +166,11 @@ export function PayrollApp() {
 
   return (
     <Shell nav={nav} active={active}>
+      {process.env.NEXT_PUBLIC_FRONTEND_ONLY === 'true' && (
+        <p role="status" className="mb-5 rounded-xl border border-line bg-white/60 px-4 py-3 text-[13px] text-ink-3">
+          UI preview · No sign-in needed. Uploads, changes and emails are unavailable.
+        </p>
+      )}
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
           key={active + (segments[1] ?? '')}

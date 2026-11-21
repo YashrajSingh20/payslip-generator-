@@ -64,6 +64,10 @@ async function once(path, { method = 'GET', body, timeoutMs = DEFAULT_TIMEOUT_MS
 /** Retries transient failures once, and only for reads. */
 export async function api(path, options = {}) {
   const method = options.method ?? 'GET';
+  if (process.env.NEXT_PUBLIC_FRONTEND_ONLY === 'true') {
+    const { previewResponse } = await import('./frontend-preview');
+    return previewResponse(path, method);
+  }
   try {
     return await once(path, options);
   } catch (error) {

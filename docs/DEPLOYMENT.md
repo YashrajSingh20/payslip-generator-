@@ -164,8 +164,10 @@ Environment variables App Runner gets (set by the stack, nothing to do by hand):
 ## Step 5: Web app on Vercel
 
 For a frontend-only preview before the API is deployed, set `FRONTEND_ONLY=true`
-in Vercel and leave `BACKEND_ORIGIN` unset. The sign-in page displays a preview
-notice and disables sign-in without making API requests. Once the API is live,
+in Vercel and leave `BACKEND_ORIGIN` unset. The UI opens directly as a demo viewer
+with empty lists and preview settings, without making API requests. Uploads,
+changes and emails are disabled. This does not create a real authenticated session.
+Once the API is live,
 set `BACKEND_ORIGIN` to its HTTPS origin and remove `FRONTEND_ONLY`, then redeploy.
 
 1. Import this repository into Vercel (framework Next.js, root directory = repo

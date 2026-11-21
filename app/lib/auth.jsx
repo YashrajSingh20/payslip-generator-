@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useMemo } from 'react';
 import { ApiError, apiGet, apiPost, setApiHandlers } from './api';
 import { qk } from './query-keys';
+import { PREVIEW_USER } from './frontend-preview';
 
 const AuthContext = createContext(null);
 
@@ -13,7 +14,7 @@ export function AuthProvider({ children }) {
   const me = useQuery({
     queryKey: qk.me,
     queryFn: async () => {
-      if (process.env.NEXT_PUBLIC_FRONTEND_ONLY === 'true') return null;
+      if (process.env.NEXT_PUBLIC_FRONTEND_ONLY === 'true') return PREVIEW_USER;
       try {
         return (await apiGet('/api/auth/me')).user;
       } catch (error) {
