@@ -9,12 +9,14 @@ import { useAuth } from '@/lib/auth';
 import { cn } from '@/lib/cn';
 
 const OTP_LENGTH = 6;
+const FRONTEND_ONLY = process.env.NEXT_PUBLIC_FRONTEND_ONLY === 'true';
 
 /** Same as the Team Portal: company domains only, so people type just the name. */
+// Locally the seeded accounts live on keystone.test, so it comes first there.
 const DOMAINS = [
+  ...(process.env.NODE_ENV === 'development' ? ['keystone.test'] : []),
   'keystonecommerce.in',
   'liwip.com',
-  ...(process.env.NODE_ENV === 'development' ? ['keystone.test'] : []),
 ];
 
 function OtpSlot({ char, isActive, hasFakeCaret }) {
@@ -58,6 +60,7 @@ export function LoginScreen() {
 
   async function sendCode(e) {
     e.preventDefault();
+    if (FRONTEND_ONLY) return;
     setError(null);
     setLoading(true);
     try {
@@ -73,6 +76,7 @@ export function LoginScreen() {
 
   async function verify(e) {
     e?.preventDefault();
+    if (FRONTEND_ONLY) return;
     if (code.length !== OTP_LENGTH || loading) return;
     setError(null);
     setLoading(true);
@@ -96,7 +100,7 @@ export function LoginScreen() {
   const submitButton = (label) => (
     <button
       type="submit"
-      disabled={loading}
+      disabled={loading || FRONTEND_ONLY}
       className="flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-ember-500 text-[15px] font-semibold text-white transition-colors hover:bg-ember-600 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-ember-500/20 disabled:opacity-50"
     >
       {loading && <LoaderCircle className="size-5 animate-spin" />}
@@ -127,6 +131,11 @@ export function LoginScreen() {
             </p>
           )}
 
+          {FRONTEND_ONLY && (
+            <p className="mb-5 text-[14px] leading-5 text-ink-3" role="status">
+              Preview only. Sign-in will be available once the service is connected.
+            </p>
+          )}
           <AnimatePresence mode="wait">
             {step === 1 ? (
               <motion.form

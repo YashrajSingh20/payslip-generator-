@@ -13,6 +13,7 @@ export function AuthProvider({ children }) {
   const me = useQuery({
     queryKey: qk.me,
     queryFn: async () => {
+      if (process.env.NEXT_PUBLIC_FRONTEND_ONLY === 'true') return null;
       try {
         return (await apiGet('/api/auth/me')).user;
       } catch (error) {

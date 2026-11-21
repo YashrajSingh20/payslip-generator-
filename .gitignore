@@ -1,4 +1,5 @@
 node_modules/
+.vercel/
 backend/node_modules/
 .next/
 out/

@@ -17,10 +17,12 @@ function backendOrigin(raw) {
 }
 
 const apiBackendOrigin = backendOrigin(process.env.BACKEND_ORIGIN);
-if (process.env.VERCEL === '1' && !apiBackendOrigin) throw new Error('BACKEND_ORIGIN is required');
+const frontendOnly = process.env.FRONTEND_ONLY === 'true' && !apiBackendOrigin;
+if (process.env.VERCEL === '1' && !apiBackendOrigin && !frontendOnly) throw new Error('BACKEND_ORIGIN is required');
 
 /** @type {import('next').NextConfig} */
 export default {
+  env: { NEXT_PUBLIC_FRONTEND_ONLY: frontendOnly ? 'true' : 'false' },
   reactStrictMode: true,
   poweredByHeader: false,
   // The floating dev-tools badge covers the mobile header's account menu.
