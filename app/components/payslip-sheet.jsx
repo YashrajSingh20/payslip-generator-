@@ -174,7 +174,7 @@ function Details({ payslip, runApproved }) {
           {can(PERM.PAYSLIP_SEND) && (
             <Button
               variant="dark"
-              disabled={!runApproved}
+              disabled={!runApproved || process.env.NEXT_PUBLIC_FRONTEND_ONLY === 'true'}
               loading={send.isPending}
               onClick={() => send.mutate()}
               title={runApproved ? undefined : 'Approve the run first'}
@@ -293,7 +293,11 @@ export function PayslipSheet({ payslipId, runApproved, ids = [], onNavigate, onC
                 <Button size="icon-sm" variant="ghost" disabled={!next} onClick={() => onNavigate(next)} aria-label="Next payslip"><ChevronRight /></Button>
               </div>
             </div>
-            {payslipId && (
+            {process.env.NEXT_PUBLIC_FRONTEND_ONLY === 'true' && detail.data ? (
+              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                <img src="/demo/payslip-preview.png" alt={`Demo payslip for ${detail.data.fullName}`} className="mx-auto w-full max-w-[760px] shadow-card" />
+              </div>
+            ) : payslipId && (
               <iframe
                 key={`${payslipId}-${detail.data?.edits?.length ?? 0}`}
                 src={`/api/payslips/${payslipId}/pdf?v=${detail.data?.edits?.length ?? 0}#toolbar=0&navpanes=0&view=FitH`}

@@ -2,7 +2,7 @@
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, FileSpreadsheet, Minus } from 'lucide-react';
+import { Check, Download, FileSpreadsheet, Minus } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { apiPost } from '@/lib/api';
@@ -110,6 +110,15 @@ export function NewRunDialog({ open, onOpenChange, onCreated }) {
         <AnimatePresence mode="wait" initial={false}>
           {!upload ? (
             <motion.div key="upload" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="px-6 pb-6 pt-4">
+              <div className="mb-4 flex flex-col gap-3 rounded-xl border border-line bg-paper p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-[13.5px] font-medium text-ink">Start with the payroll template</p>
+                  <p className="mt-1 text-[12.5px] leading-5 text-ink-3">Fill one employee per row, keep the column names, then upload the .xlsx.</p>
+                </div>
+                <Button asChild size="sm" className="shrink-0">
+                  <a href="/templates/Keystone_Payroll_Template.xlsx" download><Download /> Download template</a>
+                </Button>
+              </div>
               <WorkbookDropzone
                 onUploaded={(result) => {
                   setUpload(result);
